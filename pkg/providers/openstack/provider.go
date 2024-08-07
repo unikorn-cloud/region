@@ -51,6 +51,14 @@ var (
 	ErrKeyUndefined = errors.New("a required key was not defined")
 )
 
+type providerCredentials struct {
+	endpoint  string
+	domainID  string
+	projectID string
+	userID    string
+	password  string
+}
+
 type Provider struct {
 	// client is Kubernetes client.
 	client client.Client
@@ -61,10 +69,8 @@ type Provider struct {
 	// secret is the current region secret.
 	secret *corev1.Secret
 
-	domainID  string
-	projectID string
-	userID    string
-	password  string
+	// credentials hold cloud identity information.
+	credentials *providerCredentials
 
 	// DO NOT USE DIRECTLY, CALL AN ACCESSOR.
 	_identity *IdentityClient
@@ -147,14 +153,24 @@ func (p *Provider) serviceClientRefresh(ctx context.Context) error {
 		return fmt.Errorf("%w: project-id", ErrKeyUndefined)
 	}
 
-	// 'Regular' client calls to APIs for Nova, Glance etc. must to be project-scoped
-	providerClient := NewPasswordProvider(region.Spec.Openstack.Endpoint, string(userID), string(password), string(projectID))
+	credentials := &providerCredentials{
+		endpoint:  region.Spec.Openstack.Endpoint,
+		domainID:  string(domainID),
+		projectID: string(projectID),
+		userID:    string(userID),
+		password:  string(password),
+	}
 
-	// Identity client is scoped to a domain to use the manager role
+	// The identity client needs to have "manager" powers, so it create projects and
+	// users within a domain without full admin.
 	identity, err := NewIdentityClient(ctx, NewDomainScopedPasswordProvider(region.Spec.Openstack.Endpoint, string(userID), string(password), string(domainID)))
 	if err != nil {
 		return err
 	}
+
+	// Everything else gets a default view when bound to a project as a "member".
+	// Sadly, domain scoped accesses do not work by default any longer.
+	providerClient := NewPasswordProvider(region.Spec.Openstack.Endpoint, string(userID), string(password), string(projectID))
 
 	compute, err := NewComputeClient(ctx, providerClient, region.Spec.Openstack.Compute)
 	if err != nil {
@@ -166,7 +182,7 @@ func (p *Provider) serviceClientRefresh(ctx context.Context) error {
 		return err
 	}
 
-	network, err := NewNetworkClient(ctx, providerClient, region.Spec.Openstack.Network)
+	network, err := NewNetworkClient(ctx, providerClient, credentials, region.Spec.Openstack.Network)
 	if err != nil {
 		return err
 	}
@@ -174,12 +190,7 @@ func (p *Provider) serviceClientRefresh(ctx context.Context) error {
 	// Save the current configuration for checking next time.
 	p.region = region
 	p.secret = secret
-
-	p.domainID = string(domainID)
-	p.projectID = string(projectID)
-
-	p.userID = string(userID)
-	p.password = string(password)
+	p.credentials = credentials
 
 	// Seve the clients
 	p._identity = identity
@@ -374,7 +385,7 @@ func projectTags(organizationID, projectID string) []string {
 func (p *Provider) provisionUser(ctx context.Context, identityService *IdentityClient, project *projects.Project) (*users.User, string, error) {
 	password := string(uuid.NewUUID())
 
-	user, err := identityService.CreateUser(ctx, p.domainID, project.Name, password)
+	user, err := identityService.CreateUser(ctx, p.credentials.domainID, project.Name, password)
 	if err != nil {
 		return nil, "", err
 	}
@@ -388,7 +399,7 @@ func (p *Provider) provisionUser(ctx context.Context, identityService *IdentityC
 func (p *Provider) provisionProject(ctx context.Context, identityService *IdentityClient, organizationID, projectID string) (*projects.Project, error) {
 	name := "unikorn-" + rand.String(8)
 
-	project, err := identityService.CreateProject(ctx, p.domainID, name, projectTags(organizationID, projectID))
+	project, err := identityService.CreateProject(ctx, p.credentials.domainID, name, projectTags(organizationID, projectID))
 	if err != nil {
 		return nil, err
 	}
@@ -408,9 +419,19 @@ func roleNameToID(roles []roles.Role, name string) (string, error) {
 	return "", fmt.Errorf("%w: role %s", ErrResourceNotFound, name)
 }
 
-// getRequiredRoles returns the roles required for a user to create, manage and delete
+// getRequiredProjectManagerRoles returns the roles required for a manager to create, manager
+// and delete things like provider networks to support baremetal.
+func (p *Provider) getRequiredProjectManagerRoles() []string {
+	defaultRoles := []string{
+		"member",
+	}
+
+	return defaultRoles
+}
+
+// getRequiredProjectUserRoles returns the roles required for a user to create, manage and delete
 // a cluster.
-func (p *Provider) getRequiredRoles() []string {
+func (p *Provider) getRequiredProjectUserRoles() []string {
 	if p.region.Spec.Openstack.Identity != nil && len(p.region.Spec.Openstack.Identity.ClusterRoles) > 0 {
 		return p.region.Spec.Openstack.Identity.ClusterRoles
 	}
@@ -426,13 +447,13 @@ func (p *Provider) getRequiredRoles() []string {
 // provisionProjectRoles creates a binding between our service account and the project
 // with the required roles to provision an application credential that will allow cluster
 // creation, deletion and life-cycle management.
-func (p *Provider) provisionProjectRoles(ctx context.Context, identityService *IdentityClient, userID string, project *projects.Project) error {
+func (p *Provider) provisionProjectRoles(ctx context.Context, identityService *IdentityClient, userID string, project *projects.Project, rolesGetter func() []string) error {
 	allRoles, err := identityService.ListRoles(ctx)
 	if err != nil {
 		return err
 	}
 
-	for _, name := range p.getRequiredRoles() {
+	for _, name := range rolesGetter() {
 		roleID, err := roleNameToID(allRoles, name)
 		if err != nil {
 			return err
@@ -457,7 +478,7 @@ func (p *Provider) provisionApplicationCredential(ctx context.Context, userID, p
 
 	// Application crdentials are scoped to the user, not the project, so the name needs
 	// to be unique, so just use the project name.
-	return identityService.CreateApplicationCredential(ctx, userID, project.Name, "IaaS lifecycle management", p.getRequiredRoles())
+	return identityService.CreateApplicationCredential(ctx, userID, project.Name, "IaaS lifecycle management", p.getRequiredProjectUserRoles())
 }
 
 func (p *Provider) createClientConfig(applicationCredential *applicationcredentials.ApplicationCredential) ([]byte, string, error) {
@@ -542,6 +563,14 @@ func (p *Provider) CreateIdentity(ctx context.Context, organizationID, projectID
 		return nil, err
 	}
 
+	// Grant the "manager" role on the project for unikorn's user.  Sadly when provisioning
+	// resources, most services can only infer the project ID from the token, and not any
+	// of the heirarchy, so we cannot define policy rules for a domain manager in the same
+	// way as can be done for the identity service.
+	if err := p.provisionProjectRoles(ctx, identityService, p.credentials.userID, project, p.getRequiredProjectManagerRoles); err != nil {
+		return nil, err
+	}
+
 	// You MUST provision a new user, if we rotate a password, any application credentials
 	// hanging off it will stop working, i.e. doing that to the unikorn management user
 	// will be pretty catastrophic for all clusters in the region.
@@ -552,7 +581,7 @@ func (p *Provider) CreateIdentity(ctx context.Context, organizationID, projectID
 
 	// Give the user only what permissions they need to provision a cluster and
 	// manage it during its lifetime.
-	if err := p.provisionProjectRoles(ctx, identityService, user.ID, project); err != nil {
+	if err := p.provisionProjectRoles(ctx, identityService, user.ID, project, p.getRequiredProjectUserRoles); err != nil {
 		return nil, err
 	}
 
