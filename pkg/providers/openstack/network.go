@@ -47,15 +47,20 @@ var (
 
 // NetworkClient wraps the generic client because gophercloud is unsafe.
 type NetworkClient struct {
+	// client is a network client scoped as per the provider given
+	// during initialization.
 	client *gophercloud.ServiceClient
-
+	// options are optional configuration about the network service.
 	options *unikornv1.RegionOpenstackNetworkSpec
-
+	// credentials gives access to the region's login information.
+	credentials *providerCredentials
+	// externalNetworkCache provides caching to avoid having to talk to
+	// OpenStack.
 	externalNetworkCache *cache.TimeoutCache[[]networks.Network]
 }
 
 // NewNetworkClient provides a simple one-liner to start networking.
-func NewNetworkClient(ctx context.Context, provider CredentialProvider, options *unikornv1.RegionOpenstackNetworkSpec) (*NetworkClient, error) {
+func NewNetworkClient(ctx context.Context, provider CredentialProvider, credentials *providerCredentials, options *unikornv1.RegionOpenstackNetworkSpec) (*NetworkClient, error) {
 	providerClient, err := provider.Client(ctx)
 	if err != nil {
 		return nil, err
@@ -69,6 +74,7 @@ func NewNetworkClient(ctx context.Context, provider CredentialProvider, options 
 	c := &NetworkClient{
 		client:               client,
 		options:              options,
+		credentials:          credentials,
 		externalNetworkCache: cache.New[[]networks.Network](time.Hour),
 	}
 
@@ -176,6 +182,8 @@ func (c *NetworkClient) AllocateVLAN(ctx context.Context) (int, error) {
 }
 
 // CreateVLANProviderNetwork creates a VLAN provider network for a project.
+// This requires https://github.com/unikorn-cloud/python-unikorn-openstack-policy
+// to be installed, see the README for further details on how this has to work.
 func (c *NetworkClient) CreateVLANProviderNetwork(ctx context.Context, name string, projectID string) (int, *networks.Network, error) {
 	if c.options == nil || c.options.ProviderNetworks == nil || c.options.ProviderNetworks.PhysicalNetwork == nil {
 		return -1, nil, ErrConfiguration
@@ -206,7 +214,19 @@ func (c *NetworkClient) CreateVLANProviderNetwork(ctx context.Context, name stri
 		},
 	}
 
-	network, err := networks.Create(ctx, c.client, opts).Extract()
+	// Create a project scoped client that has the "manager" role as defined
+	// by the receiver comment, and can actually securely create provider networks.
+	providerClient, err := NewPasswordProvider(c.credentials.endpoint, c.credentials.userID, c.credentials.password, projectID).Client(ctx)
+	if err != nil {
+		return -1, nil, err
+	}
+
+	client, err := openstack.NewNetworkV2(providerClient, gophercloud.EndpointOpts{})
+	if err != nil {
+		return -1, nil, err
+	}
+
+	network, err := networks.Create(ctx, client, opts).Extract()
 	if err != nil {
 		return -1, nil, err
 	}
