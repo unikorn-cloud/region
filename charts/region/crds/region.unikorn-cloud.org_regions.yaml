@@ -57,6 +57,17 @@ spec:
           spec:
             description: RegionSpec defines metadata about the region.
             properties:
+              kubernetes:
+                description: Kubernetes is provider specific configuration for the
+                  region.
+                properties:
+                  kubeconfig:
+                    description: Kubeconfig for the remote region.
+                    format: byte
+                    type: string
+                required:
+                - kubeconfig
+                type: object
               openstack:
                 description: Openstack is provider specific configuration for the
                   region.
@@ -331,6 +342,11 @@ spec:
             required:
             - provider
             type: object
+            x-kubernetes-validations:
+            - message: kubernetes definition required for region of openstack type
+              rule: self.provider == "openstack" && has(self.openstack)
+            - message: kubernetes definition required for region of kubernetes type
+              rule: self.provider == "kubernetes" && has(self.kubernetes)
           status:
             description: RegionStatus defines the status of the region.
             properties:

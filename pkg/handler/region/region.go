@@ -18,6 +18,7 @@ package region
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 
 	coreopenapi "github.com/unikorn-cloud/core/pkg/openapi"
@@ -113,6 +114,8 @@ func (c *Client) Provider(ctx context.Context, regionID string) (providers.Provi
 
 func convertRegionType(in unikornv1.Provider) openapi.RegionType {
 	switch in {
+	case unikornv1.ProviderKubernetes:
+		return openapi.Kubernetes
 	case unikornv1.ProviderOpenstack:
 		return openapi.Openstack
 	}
@@ -129,8 +132,15 @@ func convert(in *unikornv1.Region) *openapi.RegionRead {
 	}
 
 	// Calculate any region feature flags.
-	if in.Spec.Openstack != nil && in.Spec.Openstack.Network != nil && in.Spec.Openstack.Network.ProviderNetworks != nil {
-		out.Spec.Features.PhysicalNetworks = true
+	switch in.Spec.Provider {
+	case unikornv1.ProviderKubernetes:
+		out.Spec.Kubernetes = &openapi.RegionKubernetes{
+			Kubeconfig: base64.RawURLEncoding.EncodeToString(in.Spec.Kubernetes.Kubeconfig),
+		}
+	case unikornv1.ProviderOpenstack:
+		if in.Spec.Openstack.Network != nil && in.Spec.Openstack.Network.ProviderNetworks != nil {
+			out.Spec.Features.PhysicalNetworks = true
+		}
 	}
 
 	return out

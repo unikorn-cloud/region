@@ -29,7 +29,8 @@ import (
 type Provider string
 
 const (
-	ProviderOpenstack Provider = "openstack"
+	ProviderOpenstack  Provider = "openstack"
+	ProviderKubernetes Provider = "kubernetes"
 )
 
 // RegionList is a typed list of regions.
@@ -59,13 +60,22 @@ type Region struct {
 }
 
 // RegionSpec defines metadata about the region.
+// +kubebuilder:validation:XValidation:rule="self.provider == \"openstack\" && has(self.openstack)",message="kubernetes definition required for region of openstack type"
+// +kubebuilder:validation:XValidation:rule="self.provider == \"kubernetes\" && has(self.kubernetes)",message="kubernetes definition required for region of kubernetes type"
 type RegionSpec struct {
 	// Tags are aribrary user data.
 	Tags unikornv1core.TagList `json:"tags,omitempty"`
 	// Type defines the provider type.
 	Provider Provider `json:"provider"`
+	// Kubernetes is provider specific configuration for the region.
+	Kubernetes *RegionKubernetesSpec `json:"kubernetes,omitempty"`
 	// Openstack is provider specific configuration for the region.
 	Openstack *RegionOpenstackSpec `json:"openstack,omitempty"`
+}
+
+type RegionKubernetesSpec struct {
+	// Kubeconfig for the remote region.
+	Kubeconfig []byte `json:"kubeconfig"`
 }
 
 type RegionOpenstackSpec struct {
