@@ -322,6 +322,7 @@ spec:
                 description: Type defines the provider type.
                 enum:
                 - openstack
+                - kubernetes
                 type: string
               tags:
                 description: Tags are aribrary user data.
@@ -343,10 +344,10 @@ spec:
             - provider
             type: object
             x-kubernetes-validations:
-            - message: kubernetes definition required for region of openstack type
-              rule: self.provider == "openstack" && has(self.openstack)
+            - message: openstack definition required for region of openstack type
+              rule: 'self.provider == "openstack" ? has(self.openstack) : true'
             - message: kubernetes definition required for region of kubernetes type
-              rule: self.provider == "kubernetes" && has(self.kubernetes)
+              rule: 'self.provider == "kubernetes" ? has(self.kubernetes) : true'
           status:
             description: RegionStatus defines the status of the region.
             properties:

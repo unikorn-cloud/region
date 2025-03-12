@@ -174,8 +174,20 @@
           "provider": {
             "type": "string",
             "enum": [
+              "kubernetes",
               "openstack"
             ]
+          },
+	  "kubernetes": {
+            "type": "object",
+	    "required": [
+              "kubeconfig"
+	    ],
+	    "properties": {
+	      "kubeconfig": {
+                "type": "string"
+	      }
+	    }
           },
           "openstack": {
             "type": "object",
@@ -391,6 +403,20 @@
           }
         },
         "oneOf": [
+	  {
+	    "type": "object",
+            "required": [
+              "kubernetes"
+            ],
+            "properties": {
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "kubernetes"
+                ]
+              }
+            }
+          },
           {
             "type": "object",
             "required": [

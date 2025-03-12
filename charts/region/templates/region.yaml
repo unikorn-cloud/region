@@ -9,6 +9,10 @@ metadata:
     {{- include "unikorn.labels" $ | nindent 4 }}
 spec:
   provider: {{ $region.provider }}
+  {{- with $kubernetes := $region.kubernetes }}
+  kubernetes:
+    kubeconfig: {{ $kubernetes.kubeconfig }}
+  {{- end }}
   {{- with $openstack := $region.openstack }}
   openstack:
     endpoint: {{ $openstack.endpoint }}

@@ -23,6 +23,8 @@ import (
 
 	coreopenapi "github.com/unikorn-cloud/core/pkg/openapi"
 	"github.com/unikorn-cloud/core/pkg/server/conversion"
+	identityapi "github.com/unikorn-cloud/identity/pkg/openapi"
+	"github.com/unikorn-cloud/identity/pkg/rbac"
 	unikornv1 "github.com/unikorn-cloud/region/pkg/apis/unikorn/v1alpha1"
 	"github.com/unikorn-cloud/region/pkg/openapi"
 	"github.com/unikorn-cloud/region/pkg/providers"
@@ -123,7 +125,7 @@ func convertRegionType(in unikornv1.Provider) openapi.RegionType {
 	return ""
 }
 
-func convert(in *unikornv1.Region) *openapi.RegionRead {
+func convert(ctx context.Context, in *unikornv1.Region) *openapi.RegionRead {
 	out := &openapi.RegionRead{
 		Metadata: conversion.ResourceReadMetadata(in, in.Spec.Tags, coreopenapi.ResourceProvisioningStatusProvisioned),
 		Spec: openapi.RegionSpec{
@@ -131,11 +133,13 @@ func convert(in *unikornv1.Region) *openapi.RegionRead {
 		},
 	}
 
-	// Calculate any region feature flags.
+	// Calculate any region specific configuration.
 	switch in.Spec.Provider {
 	case unikornv1.ProviderKubernetes:
-		out.Spec.Kubernetes = &openapi.RegionKubernetes{
-			Kubeconfig: base64.RawURLEncoding.EncodeToString(in.Spec.Kubernetes.Kubeconfig),
+		if err := rbac.AllowGlobalScope(ctx, "region:regions/admin", identityapi.Read); err == nil {
+			out.Spec.Kubernetes = &openapi.RegionKubernetes{
+				Kubeconfig: base64.RawURLEncoding.EncodeToString(in.Spec.Kubernetes.Kubeconfig),
+			}
 		}
 	case unikornv1.ProviderOpenstack:
 		if in.Spec.Openstack.Network != nil && in.Spec.Openstack.Network.ProviderNetworks != nil {
@@ -146,11 +150,11 @@ func convert(in *unikornv1.Region) *openapi.RegionRead {
 	return out
 }
 
-func convertList(in *unikornv1.RegionList) openapi.Regions {
-	out := make(openapi.Regions, 0, len(in.Items))
+func convertList(ctx context.Context, in *unikornv1.RegionList) openapi.Regions {
+	out := make(openapi.Regions, len(in.Items))
 
 	for i := range in.Items {
-		out = append(out, *convert(&in.Items[i]))
+		out[i] = *convert(ctx, &in.Items[i])
 	}
 
 	return out
@@ -162,5 +166,5 @@ func (c *Client) List(ctx context.Context) (openapi.Regions, error) {
 		return nil, err
 	}
 
-	return convertList(regions), nil
+	return convertList(ctx, regions), nil
 }

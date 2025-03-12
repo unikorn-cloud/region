@@ -25,12 +25,12 @@ import (
 )
 
 // Provider is used to communicate the cloud type.
-// +kubebuilder:validation:Enum=openstack
+// +kubebuilder:validation:Enum=openstack;kubernetes
 type Provider string
 
 const (
-	ProviderOpenstack  Provider = "openstack"
 	ProviderKubernetes Provider = "kubernetes"
+	ProviderOpenstack  Provider = "openstack"
 )
 
 // RegionList is a typed list of regions.
@@ -60,8 +60,8 @@ type Region struct {
 }
 
 // RegionSpec defines metadata about the region.
-// +kubebuilder:validation:XValidation:rule="self.provider == \"openstack\" && has(self.openstack)",message="kubernetes definition required for region of openstack type"
-// +kubebuilder:validation:XValidation:rule="self.provider == \"kubernetes\" && has(self.kubernetes)",message="kubernetes definition required for region of kubernetes type"
+// +kubebuilder:validation:XValidation:rule="self.provider == \"openstack\" ? has(self.openstack) : true",message="openstack definition required for region of openstack type"
+// +kubebuilder:validation:XValidation:rule="self.provider == \"kubernetes\" ? has(self.kubernetes) : true",message="kubernetes definition required for region of kubernetes type"
 type RegionSpec struct {
 	// Tags are aribrary user data.
 	Tags unikornv1core.TagList `json:"tags,omitempty"`
